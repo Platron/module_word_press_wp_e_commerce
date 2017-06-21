@@ -19,6 +19,8 @@ function gateway_platron($separator, $sessionid)
 	$strCartSql = "SELECT * FROM `".WPSC_TABLE_CART_CONTENTS."` WHERE `purchaseid`='".$purchase_log[0]['id']."'";
 	$arrCartItems = $wpdb->get_results($strCartSql,ARRAY_A) ;
 
+	$base_shipping = $purchase_log[0]['base_shipping'];
+
 	$arrEmailData = $wpdb->get_results("SELECT `id`,`type` FROM `".WPSC_TABLE_CHECKOUT_FORMS."` WHERE `name` IN ('email','Email') AND `active` = '1'",ARRAY_A);
 	foreach((array)$arrEmailData as $email)
     	$strEmail = $_POST['collected_data'][$email['id']];
@@ -47,14 +49,14 @@ function gateway_platron($separator, $sessionid)
 	$arrFields = array(
 		'pg_merchant_id'		=> get_option( 'merchant_id' ),
 		'pg_order_id'			=> $purchase_log[0]['id'],
-		'pg_currency'			=> WPSC_Countries::get_currency_code( get_option( 'currency_type' )),
+		'pg_currency'			=> get_local_currency_code(), # WPSC_Countries::get_currency_code( get_option( 'currency_type' )),
 		'pg_amount'				=> number_format($purchase_log[0]['totalprice'], 2, '.', ''),
 		'pg_user_phone'			=> $strPhone,
 		'pg_user_email'			=> $strEmail,
 		'pg_user_contact_email'	=> $strEmail,
 		'pg_lifetime'			=> (get_option( 'lifetime' ))?get_option('lifetime')*60:0,
 		'pg_testing_mode'		=> get_option( 'testmode' ),
-		'pg_description'		=> $strDescription,
+		'pg_description'		=> $strDescription ? $strDescription : '-',
 		'pg_user_ip'			=> $_SERVER['REMOTE_ADDR'],
 		'pg_language'			=> (WPLANG == 'ru_RU')?'ru':'en',
 		'pg_check_url'			=> $strUrlToCallBack . '&type=check',
@@ -76,11 +78,63 @@ function gateway_platron($separator, $sessionid)
 		$arrFields['pg_payment_system'] = $strPaymentSystemName;
 	
 	$arrFields['cms_payment_module'] = 'WP_E_COMMERCE';
-	$arrFields['pg_sig'] = PG_Signature::make('payment.php', $arrFields, get_option( 'secret_key' ));
+	$arrFields['pg_sig'] = PG_Signature::make('init_payment.php', $arrFields, get_option( 'secret_key' ));
 
 	if(WPSC_GATEWAY_DEBUG == true ) {
 		exit("<pre>".print_r($arrFields,true)."</pre>");
 	}
+
+	$response = file_get_contents('https://www.platron.ru/init_payment.php' . '?' . http_build_query($arrFields));
+	$responseElement = new SimpleXMLElement($response);
+
+	$checkResponse = PG_Signature::checkXML('init_payment.php', $responseElement, get_option( 'secret_key' ));
+
+	if ($checkResponse && (string)$responseElement->pg_status == 'ok') {
+
+   		if (get_option( 'create_ofd_check' ) == 1) {
+
+   			$paymentId = (string)$responseElement->pg_payment_id;
+
+   	        $ofdReceiptItems = array();
+   	        foreach($arrCartItems as $item){
+       		    $ofdReceiptItem = new OfdReceiptItem();
+   	            $ofdReceiptItem->label = $item['name'];
+       		    $ofdReceiptItem->amount = round($item['price'] * $item['quantity'], 2);
+   	            $ofdReceiptItem->price = round($item['price'], 2);
+       		    $ofdReceiptItem->quantity = $item['quantity'];
+   	            $ofdReceiptItem->vat = get_option( 'ofd_vat_type' );
+       		    $ofdReceiptItems[] = $ofdReceiptItem;
+   	        }
+
+            if ($base_shipping > 0) {
+       		    $ofdReceiptItem = new OfdReceiptItem();
+   	            $ofdReceiptItem->label = 'Shipping';
+       		    $ofdReceiptItem->amount = round($base_shipping, 2);
+   	            $ofdReceiptItem->price = round($base_shipping, 2);
+       		    $ofdReceiptItem->quantity = 1;
+   	            $ofdReceiptItem->vat = '18'; // fixed
+       		    $ofdReceiptItems[] = $ofdReceiptItem;
+			}			
+
+   			$ofdReceiptRequest = new OfdReceiptRequest(get_option( 'merchant_id' ), $paymentId);
+   			$ofdReceiptRequest->items = $ofdReceiptItems;
+   			$ofdReceiptRequest->sign(get_option( 'secret_key' ));
+
+   			$responseOfd = file_get_contents('https://www.platron.ru/receipt.php' . '?' . http_build_query($ofdReceiptRequest->requestArray()));
+   			$responseElementOfd = new SimpleXMLElement($responseOfd);
+
+   			if ((string)$responseElementOfd->pg_status != 'ok') {
+   				die('Platron check create error. ' . $responseElementOfd->pg_error_description);
+   			}
+   		}
+
+	} else {
+
+		die('Platron init payment error. ' . $responseElement->pg_error_description);
+
+	}
+
+	$arrFields['pg_sig'] = PG_Signature::make('payment.php', $arrFields, get_option( 'secret_key' ));
 
 
 	// Create Form to post to Platron
@@ -99,6 +153,12 @@ function gateway_platron($separator, $sessionid)
 	echo $output;
   	exit();
 }
+
+function get_local_currency_code() {
+	global $wpdb;
+	return $wpdb->get_var( $wpdb->prepare( "SELECT `code` FROM `" . WPSC_TABLE_CURRENCY_LIST . "` WHERE `id`= %d LIMIT 1", get_option( 'currency_type' ) ) );
+}
+
 
 function nzshpcrt_platron_callback()
 {
@@ -270,6 +330,16 @@ function submit_platron()
     	update_option('payment_system_name', $_POST['payment_system_name']);
     }
 
+  	if(isset($_POST['ofd_vat_type']))
+    {
+    	update_option('ofd_vat_type', $_POST['ofd_vat_type']);
+    }
+
+  	if(isset($_POST['create_ofd_check']))
+    {
+    	update_option('create_ofd_check', $_POST['create_ofd_check']);
+    }
+
 	return true;
 }
 
@@ -277,15 +347,31 @@ function submit_platron()
 function form_platron()
 {
 	$platron_testmode = get_option('testmode');
+	$platron_create_ofd_check = get_option('create_ofd_check');
+    $platron_ofd_vat_type = get_option( 'ofd_vat_type' );
+
 	$testmode_yes = "";
 	$testmode_no = "";
+	$create_ofd_check_yes = "";
+	$create_ofd_check_no = "";
+
 	switch($platron_testmode)
 	{
-		case 0:
+		case 1:
 			$testmode_yes = "checked ='checked'";
 			break;
-		case 1:
+		case 0:
 			$testmode_no = "checked ='checked'";
+			break;
+	}
+
+	switch($platron_create_ofd_check)
+	{
+		case 1:
+			$create_ofd_check_yes = "checked ='checked'";
+			break;
+		case 0:
+			$create_ofd_check_no = "checked ='checked'";
 			break;
 	}
 
@@ -346,6 +432,29 @@ function form_platron()
 				<input type='text' size='40' value='" . get_option( 'payment_system_name' ) . "' name='payment_system_name' />
 				<p class='description'>
 					" . __( 'If you want customer to choose payment system on merchant side - set in paramenter. And copy plugin with rename "platron" so many times so many payment systems you have.', 'wpsc' ) . "
+				</p>
+		</tr>
+		<tr>
+			<td>" . __( 'Create OFD check', 'wpsc' ) . "</td>
+			<td>
+				<input type='radio' value='1' name='create_ofd_check' id='create_ofd_check_yes' " . $create_ofd_check_yes . " /> <label for='create_ofd_check_yes'>".__('Yes', 'wpsc')."</label> &nbsp;
+				<input type='radio' value='0' name='create_ofd_check' id='create_ofd_check_no' "  . $create_ofd_check_no . " /> <label for='create_ofd_check_no'>".__('No', 'wpsc')."</label>
+				<p class='description'>
+					" . __( 'Create check for OFD. Used in Used for 54-FZ law.', 'wpsc' ) . "
+				</p>
+		</tr>
+		<tr>
+			<td>" . __( 'ODFD VAT type', 'wpsc' ) . "</td>
+			<td>
+                <select name='ofd_vat_type' id='ofd_vat_type'>
+                    <option value='0' "  . ($platron_ofd_vat_type == '0'  or !$platron_ofd_vat_type ? 'selected' : '') . ">0%</option>
+                    <option value='10'"  . ($platron_ofd_vat_type == '10'  ? 'selected' : '') . ">10%</option>
+                    <option value='18'"  . ($platron_ofd_vat_type == '18'  ? 'selected' : '') . ">18%</option>
+                    <option value='110'" . ($platron_ofd_vat_type == '110' ? 'selected' : '') . ">10/110%</option>
+                    <option value='118'" . ($platron_ofd_vat_type == '118' ? 'selected' : '') . ">18/118%</option>
+                </select>
+				<p class='description'>
+					" . __( 'VAT type for OFD.', 'wpsc' ) . "
 				</p>
 		</tr>";
 
