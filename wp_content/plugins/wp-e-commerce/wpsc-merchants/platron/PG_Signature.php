@@ -36,8 +36,9 @@ class PG_Signature {
 	 */
 	public static function make ( $strScriptName, $arrParams, $strSecretKey )
 	{
-		$arrFlatParams = self::makeFlatParamsArray($arrParams);
-		return md5( self::makeSigStr($strScriptName, $arrFlatParams, $strSecretKey) );
+		//$arrFlatParams = self::makeFlatParamsArray($arrParams);
+		//return md5( self::makeSigStr($strScriptName, $arrFlatParams, $strSecretKey) );
+		return md5( self::makeSigStr($strScriptName, $arrParams, $strSecretKey) );
 	}
 
 	/**
@@ -66,8 +67,7 @@ class PG_Signature {
 		return self::makeSigStr($strScriptName, $arrParams, $strSecretKey);
 	}
 
-
-	private static function makeSigStr ( $strScriptName, array $arrParams, $strSecretKey ) {
+	private static function makeSigStr ( $strScriptName, $arrParams, $strSecretKey ) {
 		unset($arrParams['pg_sig']);
 		
 		ksort($arrParams);
@@ -75,7 +75,24 @@ class PG_Signature {
 		array_unshift($arrParams, $strScriptName);
 		array_push   ($arrParams, $strSecretKey);
 
-		return join(';', $arrParams);
+		return self::arJoin($arrParams);
+	}
+
+	private static function arJoin ($in) {
+		return rtrim(self::arJoinProcess($in, ''), ';');
+	}
+
+	private static function arJoinProcess ($in, $str) {
+		if (is_array($in)) {
+			ksort($in);
+			$s = '';
+			foreach($in as $v) {
+				$s .= self::arJoinProcess($v, $str);
+			}
+			return $s;
+		} else {
+			return $str . $in . ';';
+		}
 	}
 	
 	private static function makeFlatParamsArray ( $arrParams, $parent_name = '' )
@@ -187,3 +204,98 @@ class PG_Signature {
 		return $arrParams;
 	}
 }
+
+
+class OfdReceiptRequest
+{
+	const SCRIPT_NAME = 'receipt.php';
+
+	public $merchantId;
+	public $operationType = 'payment';
+	public $paymentId;
+	public $items = array();
+
+	private $params = array();
+
+	public function __construct($merchantId, $paymentId)
+	{
+		$this->merchantId = $merchantId;
+		$this->paymentId = $paymentId;
+	}
+
+	public function sign($secretKey)
+	{
+		$params = $this->toArray();
+		$params['pg_salt'] = 'salt';
+		$params['pg_sig'] = PG_Signature::make(self::SCRIPT_NAME, $params, $secretKey);
+
+		$this->params = $params;
+	}
+
+	public function toArray()
+	{
+		$result = array();
+
+		$result['pg_merchant_id'] = $this->merchantId;
+		$result['pg_operation_type'] = $this->operationType;
+		$result['pg_payment_id'] = $this->paymentId;
+
+		foreach ($this->items as $item) {
+			$result['pg_items'][] = $item->toArray();
+		}
+
+		return $result;
+	}
+
+	public function requestArray()
+	{
+		return $this->params;
+	}
+
+	public function makeXml()
+	{
+		//var_dump($this->params);
+		$xmlElement = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><request></request>');
+
+		foreach ($this->params as $paramName => $paramValue) {
+			if ($paramName == 'pg_items') {
+				//$itemsElement = $xmlElement->addChild($paramName);
+				foreach ($paramValue as $itemParams) {
+					$itemElement = $xmlElement->addChild($paramName);
+					foreach ($itemParams as $itemParamName => $itemParamValue) {
+						$itemElement->addChild($itemParamName, $itemParamValue);
+					}
+				}
+				continue;
+			}
+
+			$xmlElement->addChild($paramName, $paramValue);
+		}
+
+		return $xmlElement->asXML();
+	}
+}
+
+
+class OfdReceiptItem
+{
+	public $label;
+	public $amount;
+	public $price;
+	public $quantity;
+	public $vat;
+
+	public function toArray()
+	{
+		return array(
+			'pg_label' => extension_loaded('mbstring') ? mb_substr($this->label, 0, 128) : substr($this->label, 0, 128),
+			'pg_amount' => $this->amount,
+			'pg_price' => $this->price,
+			'pg_quantity' => $this->quantity,
+			'pg_vat' => $this->vat,
+		);
+	}
+}
+
+
+
