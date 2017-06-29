@@ -108,7 +108,7 @@ function gateway_platron($separator, $sessionid)
 
             if ($base_shipping > 0) {
        		    $ofdReceiptItem = new OfdReceiptItem();
-   	            $ofdReceiptItem->label = 'Shipping';
+   	            $ofdReceiptItem->label = $purchase_log[0]['shipping_option'] ? $purchase_log[0]['shipping_option'] : 'Shipping';
        		    $ofdReceiptItem->amount = round($base_shipping, 2);
    	            $ofdReceiptItem->price = round($base_shipping, 2);
        		    $ofdReceiptItem->quantity = 1;
@@ -139,7 +139,7 @@ function gateway_platron($separator, $sessionid)
 
 	// Create Form to post to Platron
 	$output = "
-		<form id=\"platron_form\" name=\"platron_form\" method=\"post\" action=\"https://platron.ru/payment.php\">\n";
+		<form id=\"platron_form\" name=\"platron_form\" method=\"post\" action=\"" . $responseElement->pg_redirect_url . "\">\n";
 
 	foreach($arrFields as $strName=>$strValue) {
 			$output .= "			<input type=\"hidden\" name=\"$strName\" value=\"$strValue\" />\n";
