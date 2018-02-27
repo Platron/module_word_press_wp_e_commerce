@@ -112,7 +112,7 @@ function gateway_platron($separator, $sessionid)
        		    $ofdReceiptItem->amount = round($base_shipping, 2);
    	            $ofdReceiptItem->price = round($base_shipping, 2);
        		    $ofdReceiptItem->quantity = 1;
-   	            $ofdReceiptItem->vat = '18'; // fixed
+   	            $ofdReceiptItem->vat = get_option( 'ofd_vat_type' ) == 'none'? 'none': '18';
        		    $ofdReceiptItems[] = $ofdReceiptItem;
 			}			
 
@@ -452,6 +452,8 @@ function form_platron()
                     <option value='18'"  . ($platron_ofd_vat_type == '18'  ? 'selected' : '') . ">18%</option>
                     <option value='110'" . ($platron_ofd_vat_type == '110' ? 'selected' : '') . ">10/110%</option>
                     <option value='118'" . ($platron_ofd_vat_type == '118' ? 'selected' : '') . ">18/118%</option>
+		    <option value='none'" . ($platron_ofd_vat_type == 'none' ? 'selected' : '') . ">Не облагается
+		    </option>
                 </select>
 				<p class='description'>
 					" . __( 'VAT type for OFD.', 'wpsc' ) . "
