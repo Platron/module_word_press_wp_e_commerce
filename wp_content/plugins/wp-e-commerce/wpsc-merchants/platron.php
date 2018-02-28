@@ -57,7 +57,6 @@ function gateway_platron($separator, $sessionid)
 		'pg_lifetime'			=> (get_option( 'lifetime' ))?get_option('lifetime')*60:0,
 		'pg_testing_mode'		=> get_option( 'testmode' ),
 		'pg_description'		=> $strDescription ? $strDescription : '-',
-		'pg_user_ip'			=> $_SERVER['REMOTE_ADDR'],
 		'pg_language'			=> (WPLANG == 'ru_RU')?'ru':'en',
 		'pg_check_url'			=> $strUrlToCallBack . '&type=check',
 		'pg_result_url'			=> $strUrlToCallBack . '&type=result',
